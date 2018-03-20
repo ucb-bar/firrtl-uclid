@@ -176,3 +176,10 @@ class MinimumVerilogCompiler extends Compiler {
 class SystemVerilogCompiler extends VerilogCompiler {
   Driver.dramaticWarning("SystemVerilog Compiler behaves the same as the Verilog Compiler!")
 }
+
+/** Emits Uclid models */
+class UclidCompiler extends Compiler {
+  def emitter = new UclidEmitter
+  def transforms: Seq[Transform] = getLoweringTransforms(ChirrtlForm, LowForm) ++
+    Seq(new LowFirrtlOptimization, new BlackBoxSourceHelper)
+}

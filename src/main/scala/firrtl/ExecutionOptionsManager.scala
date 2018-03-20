@@ -210,6 +210,7 @@ extends ComposableOptions {
       case "verilog"   => new VerilogCompiler()
       case "mverilog"  => new MinimumVerilogCompiler()
       case "sverilog"  => new SystemVerilogCompiler()
+      case "uclid"     => new UclidCompiler()
     }
   }
 
@@ -217,6 +218,7 @@ extends ComposableOptions {
     compilerName match {
       case "verilog" | "mverilog" => "v"
       case "sverilog"             => "sv"
+      case "uclid"                => "ucl"
       case "low"                  => "lo.fir"
       case "middle"               => "mid.fir"
       case "high"                 => "hi.fir"
@@ -271,6 +273,7 @@ extends ComposableOptions {
       case "verilog" => classOf[VerilogEmitter]
       case "mverilog" => classOf[MinimumVerilogEmitter]
       case "sverilog" => classOf[VerilogEmitter]
+      case "uclid" => classOf[UclidEmitter]
     }
     getOutputConfig(optionsManager) match {
       case SingleFile(_) => Seq(EmitCircuitAnnotation(emitter))
@@ -347,12 +350,12 @@ trait HasFirrtlOptions {
 
   parser.opt[String]("compiler")
     .abbr("X")
-    .valueName ("<high|middle|low|verilog|mverilog|sverilog|none>")
+    .valueName ("<high|middle|low|verilog|mverilog|sverilog|none|uclid>")
     .foreach { x =>
       firrtlOptions = firrtlOptions.copy(compilerName = x)
     }
     .validate { x =>
-      if (Array("high", "middle", "low", "verilog", "mverilog", "sverilog", "none").contains(x.toLowerCase)) {
+      if (Array("high", "middle", "low", "verilog", "mverilog", "sverilog", "none", "uclid").contains(x.toLowerCase)) {
         parser.success
       } else {
         parser.failure(s"$x not a legal compiler")
@@ -507,8 +510,8 @@ object FirrtlExecutionSuccess {
   * Indicates a successful execution of the firrtl compiler, returning the compiled result and
   * the type of compile
   *
-  * @param emitType The name of the compiler used, currently "high", "middle", "low", "verilog", "mverilog", or
-  * "sverilog"
+  * @param emitType The name of the compiler used, currently "high", "middle", "low", "verilog", "mverilog"
+  * "sverilog", or "uclid"
   * @param emitted   The emitted result of compilation
   */
 class FirrtlExecutionSuccess(
