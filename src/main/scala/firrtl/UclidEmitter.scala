@@ -12,6 +12,7 @@ import scala.io.Source
 
 import firrtl.ir._
 import firrtl.passes._
+import firrtl.transforms._
 import firrtl.annotations._
 import firrtl.Mappers._
 import firrtl.PrimOps._
@@ -30,7 +31,6 @@ class IndentLevel {
 class UclidEmitter extends SeqTransform with Emitter {
   def inputForm = LowForm
   def outputForm = LowForm
-  def transforms = Seq.empty
 
   private def serialize_rhs_ref(wr: WRef): String = wr.kind match {
     case RegKind | PortKind => wr.name
@@ -45,6 +45,7 @@ class UclidEmitter extends SeqTransform with Emitter {
 
   private def serialize_binop(op: PrimOp, arg0: String, arg1: String): String = op match {
     case Add => s"(0bv1 ++ $arg0) + (0bv1 ++ $arg1)"
+    case Sub => serialize_binop(Add, arg0, s"(${serialize_unop(Neg, arg1)})")
     case Lt => s"$arg0 < $arg1"
     case Leq => s"$arg0 <= $arg1"
     case Gt => s"$arg0 > $arg1"
@@ -228,6 +229,11 @@ class UclidEmitter extends SeqTransform with Emitter {
       case _ => throw EmitterException(s"UCLID backed supports ordinary modules only!")
     }
   }
+
+  /** Transforms to run before emission */
+  def transforms = Seq(
+    new RemoveTail
+  )
 
   override def execute(cs: CircuitState): CircuitState = {
     val extraAnnotations = cs.annotations.flatMap {
