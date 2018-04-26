@@ -37,15 +37,15 @@ class UclidEmitter extends SeqTransform with Emitter {
     case _ => s"${wr.name}'"
   }
 
-  private def serialize_unop(op: PrimOp, arg0: String): String = op match {
+  private def serialize_unop(p: DoPrim, arg0: String): String = p.op match {
     case Neg => s"-$arg0"
     case Not => s"~$arg0"
-    case _ => throwInternalError(s"Illegal unary operator: $op")
+    case _ => throwInternalError(s"Illegal unary operator: ${p.op}")
   }
 
-  private def serialize_binop(op: PrimOp, arg0: String, arg1: String): String = op match {
+  private def serialize_binop(p: DoPrim, arg0: String, arg1: String): String = p.op match {
     case Add => s"(0bv1 ++ $arg0) + (0bv1 ++ $arg1)"
-    case Sub => serialize_binop(Add, arg0, s"(${serialize_unop(Neg, arg1)})")
+    case Sub => s"(0bv1 ++ $arg0) - (0bv1 ++ $arg1)"
     case Lt => s"$arg0 < $arg1"
     case Leq => s"$arg0 <= $arg1"
     case Gt => s"$arg0 > $arg1"
@@ -57,21 +57,27 @@ class UclidEmitter extends SeqTransform with Emitter {
     case Xor => s"$arg0 ^ $arg1"
     case Bits => s"${arg0}[${arg1}]"
     case Cat => s"${arg0} ++ ${arg1}"
-    case _ => throwInternalError(s"Illegal binary operator: $op")
+    case Pad =>
+      val extra_bits = p.consts(0) - get_width(p.args(0).tpe)
+      if (extra_bits > 0) 
+        s"0bv${extra_bits} ++ ${arg0}"
+      else
+        s"${arg0}"
+    case _ => throwInternalError(s"Illegal binary operator: ${p.op}")
   }
 
-  private def serialize_ternop(op: PrimOp, arg0: String, arg1: String, arg2: String): String = op match {
+  private def serialize_ternop(p: DoPrim, arg0: String, arg1: String, arg2: String): String = p.op match {
     case Bits => s"${arg0}[${arg1}:${arg2}]"
-    case _ => throwInternalError(s"Illegal ternary operator: $op")
+    case _ => throwInternalError(s"Illegal ternary operator: ${p.op}")
   }
 
   private def serialize_prim(p: DoPrim): String = (p.args.length, p.consts.length) match {
-    case (2, 0) => serialize_binop(p.op, serialize_rhs_exp(p.args(0)), serialize_rhs_exp(p.args(1)))
-    case (1, 0) => serialize_unop(p.op, serialize_rhs_exp(p.args(0)))
-    case (1, 2) => serialize_ternop(p.op, serialize_rhs_exp(p.args(0)), p.consts(0).toString, p.consts(1).toString)
-    case (1, 1) => serialize_binop(p.op, serialize_rhs_exp(p.args(0)), p.consts(0).toString)
-    case (0, 2) => serialize_binop(p.op, p.consts(0).toString, p.consts(1).toString)
-    case (0, 1) => serialize_unop(p.op, p.consts(0).toString)
+    case (2, 0) => serialize_binop(p, serialize_rhs_exp(p.args(0)), serialize_rhs_exp(p.args(1)))
+    case (1, 0) => serialize_unop(p, serialize_rhs_exp(p.args(0)))
+    case (1, 2) => serialize_ternop(p, serialize_rhs_exp(p.args(0)), p.consts(0).toString, p.consts(1).toString)
+    case (1, 1) => serialize_binop(p, serialize_rhs_exp(p.args(0)), p.consts(0).toString)
+    case (0, 2) => serialize_binop(p, p.consts(0).toString, p.consts(1).toString)
+    case (0, 1) => serialize_unop(p, p.consts(0).toString)
     case _ => throwInternalError(s"Illegal primitive operator operands")
   }
 
@@ -82,22 +88,28 @@ class UclidEmitter extends SeqTransform with Emitter {
     s"if ($i == 0bv1) then ($t) else ($e)"
   }
 
-  private def serialize_width(w: Width): String = w match {
-    case IntWidth(iw: BigInt) => iw.toString
+  private def get_width(w: Width): BigInt = w match {
+    case IntWidth(iw: BigInt) => iw
     case _ => throwInternalError(s"Types must have integral widths")
+  }
+
+  private def get_width(tpe: Type): BigInt = tpe match {
+    case UIntType(w: Width) => get_width(w)
+    case SIntType(w: Width) => get_width(w)
+    case _ => throwInternalError(s"Cannot get width of type ${tpe}")
   }
 
   private def serialize_rhs_exp(e: Expression): String = e match {
     case wr: WRef => serialize_rhs_ref(wr)
     case m: Mux => serialize_mux(m)
     case p: DoPrim => serialize_prim(p)
-    case ul: UIntLiteral => s"${ul.value}bv${serialize_width(ul.width)}"
+    case ul: UIntLiteral => s"${ul.value}bv${get_width(ul.width)}"
     case _ => throwInternalError(s"Trying to emit unsupported expression")
   }
 
   private def serialize_type(tpe: Type): String = tpe match {
-    case UIntType(w: Width) => s"bv${serialize_width(w)}"
-    case SIntType(w: Width) => s"bv${serialize_width(w)}"
+    case UIntType(w: Width) => s"bv${get_width(w)}"
+    case SIntType(w: Width) => s"bv${get_width(w)}"
     case _ => throwInternalError(s"Trying to emit unsupported type")
   }
 
