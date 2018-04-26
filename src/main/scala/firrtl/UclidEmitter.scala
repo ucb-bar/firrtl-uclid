@@ -33,13 +33,14 @@ class UclidEmitter extends SeqTransform with Emitter {
   def outputForm = LowForm
 
   private def serialize_rhs_ref(wr: WRef): String = wr.kind match {
-    case RegKind | PortKind => wr.name
+    case PortKind | RegKind => wr.name
     case _ => s"${wr.name}'"
   }
 
   private def serialize_unop(p: DoPrim, arg0: String): String = p.op match {
     case Neg => s"-$arg0"
-    case Not => s"~$arg0"
+    // TODO: fix big hack that assumes all 1-bit UInts are booleans
+    case Not => if (get_width(p.tpe) == 1) s"!${arg0}" else s"~$arg0"
     case _ => throwInternalError(s"Illegal unary operator: ${p.op}")
   }
 
@@ -50,10 +51,20 @@ class UclidEmitter extends SeqTransform with Emitter {
     case Leq => s"$arg0 <= $arg1"
     case Gt => s"$arg0 > $arg1"
     case Geq => s"$arg0 >= $arg1"
-    case Eq => s"$arg0 = $arg1"
+    case Eq => s"$arg0 == $arg1"
     case Neq => s"$arg0 != $arg1"
-    case And => s"$arg0 & $arg1"
-    case Or => s"$arg0 | $arg1"
+    case And =>
+      // TODO: fix big hack that assumes all 1-bit UInts are booleans
+      if (get_width(p.tpe) == 1)
+        s"$arg0 && $arg1"
+      else
+        s"$arg0 & $arg1"
+    case Or =>
+      // TODO: fix big hack that assumes all 1-bit UInts are booleans
+      if (get_width(p.tpe) == 1)
+        s"$arg0 || $arg1"
+      else
+        s"$arg0 | $arg1"
     case Xor => s"$arg0 ^ $arg1"
     case Bits => s"${arg0}[${arg1}]"
     case Cat => s"${arg0} ++ ${arg1}"
@@ -85,15 +96,15 @@ class UclidEmitter extends SeqTransform with Emitter {
     val i = serialize_rhs_exp(m.cond)
     val t = serialize_rhs_exp(m.tval)
     val e = serialize_rhs_exp(m.fval)
-    s"if ($i == 0bv1) then ($t) else ($e)"
+    s"if ($i) then ($t) else ($e)"
   }
 
-  private def get_width(w: Width): BigInt = w match {
-    case IntWidth(iw: BigInt) => iw
+  private def get_width(w: Width): Int = w match {
+    case IntWidth(iw: BigInt) => iw.intValue
     case _ => throwInternalError(s"Types must have integral widths")
   }
 
-  private def get_width(tpe: Type): BigInt = tpe match {
+  private def get_width(tpe: Type): Int = tpe match {
     case UIntType(w: Width) => get_width(w)
     case SIntType(w: Width) => get_width(w)
     case _ => throwInternalError(s"Cannot get width of type ${tpe}")
@@ -103,12 +114,26 @@ class UclidEmitter extends SeqTransform with Emitter {
     case wr: WRef => serialize_rhs_ref(wr)
     case m: Mux => serialize_mux(m)
     case p: DoPrim => serialize_prim(p)
-    case ul: UIntLiteral => s"${ul.value}bv${get_width(ul.width)}"
+    case ul: UIntLiteral => get_width(ul.width) match {
+      // TODO: fix big hack that assumes all 1-bit UInts are booleans
+      case 1 => if (ul.value == 1) "true" else "false"
+      case i: Int =>
+        s"${ul.value}bv${i}"
+    }
+    case _ => throwInternalError(s"Trying to emit unsupported expression")
+  }
+
+  private def serialize_lhs_exp(e: Expression): String = e match {
+    case wr: WRef => wr.name
     case _ => throwInternalError(s"Trying to emit unsupported expression")
   }
 
   private def serialize_type(tpe: Type): String = tpe match {
-    case UIntType(w: Width) => s"bv${get_width(w)}"
+    case UIntType(w: Width) => get_width(w) match {
+      // TODO: fix big hack that assumes all 1-bit UInts are booleans
+      case 1 => "boolean"
+      case i: Int => s"bv${i}"
+    }
     case SIntType(w: Width) => s"bv${get_width(w)}"
     case _ => throwInternalError(s"Trying to emit unsupported type")
   }
@@ -149,7 +174,7 @@ class UclidEmitter extends SeqTransform with Emitter {
   }
 
   private def emit_connect(c: Connect)(implicit w: Writer, indent: IndentLevel): Unit = {
-    val lhs = serialize_rhs_exp(c.loc)
+    val lhs = serialize_lhs_exp(c.loc)
     indent_line()
     w write s"${lhs}' = "
     w write serialize_rhs_exp(c.expr)
