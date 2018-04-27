@@ -32,9 +32,8 @@ class UclidEmitter extends SeqTransform with Emitter {
   def inputForm = LowForm
   def outputForm = LowForm
 
-  private def serialize_rhs_ref(wr: WRef): String = wr.kind match {
-    case PortKind | RegKind => wr.name
-    case _ => s"${wr.name}'"
+  private def serialize_rhs_ref(wr: WRef)(implicit rhsPrimes: Boolean): String = {
+    if (rhsPrimes) s"${wr.name}'" else s"${wr.name}"
   }
 
   private def serialize_unop(p: DoPrim, arg0: String): String = p.op match {
@@ -82,7 +81,7 @@ class UclidEmitter extends SeqTransform with Emitter {
     case _ => throwInternalError(s"Illegal ternary operator: ${p.op}")
   }
 
-  private def serialize_prim(p: DoPrim): String = (p.args.length, p.consts.length) match {
+  private def serialize_prim(p: DoPrim)(implicit rhsPrimes: Boolean): String = (p.args.length, p.consts.length) match {
     case (2, 0) => serialize_binop(p, serialize_rhs_exp(p.args(0)), serialize_rhs_exp(p.args(1)))
     case (1, 0) => serialize_unop(p, serialize_rhs_exp(p.args(0)))
     case (1, 2) => serialize_ternop(p, serialize_rhs_exp(p.args(0)), p.consts(0).toString, p.consts(1).toString)
@@ -92,7 +91,7 @@ class UclidEmitter extends SeqTransform with Emitter {
     case _ => throwInternalError(s"Illegal primitive operator operands")
   }
 
-  private def serialize_mux(m: Mux): String = {
+  private def serialize_mux(m: Mux)(implicit rhsPrimes: Boolean): String = {
     val i = serialize_rhs_exp(m.cond)
     val t = serialize_rhs_exp(m.tval)
     val e = serialize_rhs_exp(m.fval)
@@ -110,7 +109,7 @@ class UclidEmitter extends SeqTransform with Emitter {
     case _ => throwInternalError(s"Cannot get width of type ${tpe}")
   }
 
-  private def serialize_rhs_exp(e: Expression): String = e match {
+  private def serialize_rhs_exp(e: Expression)(implicit rhsPrimes: Boolean): String = e match {
     case wr: WRef => serialize_rhs_ref(wr)
     case m: Mux => serialize_mux(m)
     case p: DoPrim => serialize_prim(p)
@@ -166,14 +165,14 @@ class UclidEmitter extends SeqTransform with Emitter {
     w write s"var ${r.name} : ${uclType};\n"
   }
 
-  private def emit_node_assignment(n: DefNode)(implicit w: Writer, indent: IndentLevel): Unit = {
+  private def emit_node_assignment(n: DefNode)(implicit w: Writer, indent: IndentLevel, rhsPrime: Boolean): Unit = {
     indent_line()
     w write s"${n.name}' = "
     w write serialize_rhs_exp(n.value)
     w write ";\n"
   }
 
-  private def emit_connect(c: Connect)(implicit w: Writer, indent: IndentLevel): Unit = {
+  private def emit_connect(c: Connect)(implicit w: Writer, indent: IndentLevel, rhsPrime: Boolean): Unit = {
     val lhs = serialize_lhs_exp(c.loc)
     indent_line()
     w write s"${lhs}' = "
@@ -251,9 +250,11 @@ class UclidEmitter extends SeqTransform with Emitter {
     emit_comment("Nodes")
     nodes.foreach(emit_node_decl(_))
     emit_open_next_scope()
+    implicit var rhsPrimes = false
+    reg_assigns.foreach(emit_connect(_))
+    rhsPrimes = true
     nodes.foreach(emit_node_assignment(_))
     output_assigns.foreach(emit_connect(_))
-    reg_assigns.foreach(emit_connect(_))
     emit_close_scope()
     emit_close_scope()
   }
