@@ -409,7 +409,6 @@ class UclidEmitter extends SeqTransform with Emitter {
   )
 
   override def execute(cs: CircuitState): CircuitState = {
-    println(cs.circuit.serialize)
     val extraAnnotations = cs.annotations.flatMap {
       case EmitCircuitAnnotation(_) =>
         val writer = new java.io.StringWriter
