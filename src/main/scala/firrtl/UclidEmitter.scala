@@ -405,7 +405,8 @@ class UclidEmitter extends SeqTransform with Emitter {
   /** Transforms to run before emission */
   def transforms = Seq(
     new RemoveTail,
-    new SimplifyRegUpdate
+    new SimplifyRegUpdate,
+    new lime.EmitChannelInfo
   )
 
   override def execute(cs: CircuitState): CircuitState = {
