@@ -181,7 +181,11 @@ class EmitChannelInfo extends Transform {
   private val channelPrefix = "channels"
   private val ChannelRegex = s"""${channelPrefix}_(\\w+)_bits""".r
 
-  private def getChannelDeps(c: Circuit): List[(String, (Int, List[String]))] = {
+  case class ChannelsJson(inputs: Seq[InputChannel], outputs: Seq[OutputChannel])
+  case class InputChannel(name: String, width: Int)
+  case class OutputChannel(name: String, width: Int, dependencies: Seq[String])
+
+  private def getChannelDeps(c: Circuit): ChannelsJson = {
     val depGraph = createDependencyGraph(c)
 
     val topMod = c.modules.find(_.name == c.main).get
@@ -194,22 +198,33 @@ class EmitChannelInfo extends Transform {
     val portNames = cports.map(_.name)
     val portIndex = portNames.zipWithIndex.toMap
 
-    cports.map { c =>
-      val deps = dependsOn(c.name).map { case LogicNode(_, n) => n }.toSeq.sortBy(portIndex)
-      val width = bitWidth(c.tpe).toInt
-      c.name -> (width, deps.toList)
-    }.toList
-  }
 
-  case class ChannelJson(name: String, width: Int, dependencies: Seq[String])
+    val channels = cports.map { c =>
+      val deps = dependsOn(c.name).map { case LogicNode(_, n) => n }.toSeq
+                                  .sortBy(portIndex).map(_.stripSuffix("_bits"))
+      val width = bitWidth(c.tpe).toInt
+      val name = c.name.stripSuffix("_bits")
+      c.direction match {
+        case Input =>
+          assert(deps.isEmpty)
+          InputChannel(name, width)
+        case Output =>
+          OutputChannel(name, width, deps)
+      }
+    }
+    val inputs = channels.collect { case in: InputChannel => in }
+    val outputs = channels.collect { case out: OutputChannel => out }
+    assert(channels.size == (inputs.size + outputs.size))
+    ChannelsJson(inputs, outputs)
+  }
 
   def execute(state: CircuitState): CircuitState = {
     val td = state.annotations.collectFirst { case TargetDirAnnotation(value) => value }.get
-    val deps = getChannelDeps(state.circuit).map { case (n, (w, ds)) => ChannelJson(n, w, ds) }
+    val result = getChannelDeps(state.circuit)
     val outFile = new File(td, s"${state.circuit.main}.channels.json")
     val outputWriter = new PrintWriter(outFile)
     implicit val formats = org.json4s.DefaultFormats
-    outputWriter.write(Serialization.writePretty(deps))
+    outputWriter.write(Serialization.writePretty(result))
     outputWriter.close()
     state
   }
