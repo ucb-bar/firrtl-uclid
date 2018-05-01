@@ -179,39 +179,56 @@ class EmitChannelInfo extends Transform {
   import DependencyGraph._
 
   private val channelPrefix = "channels"
-  private val ChannelRegex = s"""${channelPrefix}_(\\w+)_bits""".r
+  private val ChannelRegex = s"""${channelPrefix}_([^\\W_]+)_(\\w+)""".r
 
+  // JSON case classes
   case class ChannelsJson(inputs: Seq[InputChannel], outputs: Seq[OutputChannel])
-  case class InputChannel(name: String, width: Int)
-  case class OutputChannel(name: String, width: Int, dependencies: Seq[String])
+  case class Field(name: String, width: Int)
+  case class InputChannel(name: String, fields: Seq[Field])
+  case class OutputChannel(name: String, fields: Seq[Field], dependencies: Seq[String])
 
   private def getChannelDeps(c: Circuit): ChannelsJson = {
+    // Beats Tuple4
+    case class ChannelPort(port: Port, channel: String, field: String, node: LogicNode)
+
     val depGraph = createDependencyGraph(c)
 
     val topMod = c.modules.find(_.name == c.main).get
-    val cports = topMod.ports.collect { case p @ Port(_, ChannelRegex(cname), _,_) => p }
+    val cports = topMod.ports.collect { case p @ Port(_, ChannelRegex(_,_), _,_) => p }
 
-    val nodes = ListMap(cports.map(c => LogicNode(topMod.name, c.name) -> c): _*)
-    val dependsOn = nodes.map { case (n, p) =>
-      p.name -> depGraph.reachableFrom(n).filter(nodes.contains) }
-
-    val portNames = cports.map(_.name)
-    val portIndex = portNames.zipWithIndex.toMap
-
-
-    val channels = cports.map { c =>
-      val deps = dependsOn(c.name).map { case LogicNode(_, n) => n }.toSeq
-                                  .sortBy(portIndex).map(_.stripSuffix("_bits"))
-      val width = bitWidth(c.tpe).toInt
-      val name = c.name.stripSuffix("_bits")
-      c.direction match {
-        case Input =>
-          assert(deps.isEmpty)
-          InputChannel(name, width)
-        case Output =>
-          OutputChannel(name, width, deps)
-      }
+    val cports2 = topMod.ports.collect {
+      case p @ Port(_, ChannelRegex(c, f), _,_) if f != "ready" && f != "valid" =>
+        ChannelPort(p, c, f, LogicNode(topMod.name, p.name))
     }
+    val cportsMap = cports2.groupBy(_.channel)
+    val nodesToChannel = cports2.map(c => c.node -> c.channel).toMap
+
+    // For ordering ports
+    val portIndex = cports2.zipWithIndex.map { case (p, i) => p.port.name -> i }.toMap
+    // For ordering channels
+    val channelIndex = cports2.zipWithIndex
+                              .groupBy(_._1.channel)
+                              .mapValues { case vs => vs.map(_._2).max }
+
+    val cportsDep = cportsMap.mapValues { cps =>
+      cps.flatMap(cp => depGraph.reachableFrom(cp.node).flatMap(nodesToChannel.get))
+         .distinct
+         .sortBy(channelIndex)
+    }
+
+    val channels = cportsMap.toSeq.sortBy(x => channelIndex(x._1))
+      .map { case (cname, cps) =>
+        val fields = cps.sortBy(x => portIndex(x.port.name))
+                        .map(cp => Field(cp.field, bitWidth(cp.port.tpe).toInt))
+        val deps = cportsDep(cname)
+        cps.head.port.direction match {
+          case Input =>
+            assert(deps.isEmpty)
+            InputChannel(cname, fields)
+          case Output =>
+            OutputChannel(cname, fields, deps)
+        }
+      }
     val inputs = channels.collect { case in: InputChannel => in }
     val outputs = channels.collect { case out: OutputChannel => out }
     assert(channels.size == (inputs.size + outputs.size))
