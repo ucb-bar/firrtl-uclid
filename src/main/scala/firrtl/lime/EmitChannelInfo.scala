@@ -160,7 +160,7 @@ class EmitChannelInfo extends Transform {
   import DependencyGraph._
 
   private val channelPrefix = "channels"
-  private val ChannelRegex = s"""${channelPrefix}_([^\\W_]+)_(\\w+)""".r
+  private val ChannelRegex = s"""${channelPrefix}_(\\w+)_(\\w+)""".r
 
   // JSON case classes
   case class ChannelsJson(inputs: Seq[InputChannel], outputs: Seq[OutputChannel])
@@ -175,21 +175,20 @@ class EmitChannelInfo extends Transform {
     val depGraph = createDependencyGraph(c)
 
     val topMod = c.modules.find(_.name == c.main).get
-    val cports = topMod.ports.collect { case p @ Port(_, ChannelRegex(_,_), _,_) => p }
 
-    val cports2 = topMod.ports.collect {
+    val cports = topMod.ports.collect {
       case p @ Port(_, ChannelRegex(c, f), _,_) if f != "ready" && f != "valid" =>
         ChannelPort(p, c, f, LogicNode(topMod.name, p.name))
     }
-    val cportsMap = cports2.groupBy(_.channel)
-    val nodesToChannel = cports2.map(c => c.node -> c.channel).toMap
+    val cportsMap = cports.groupBy(_.channel)
+    val nodesToChannel = cports.map(c => c.node -> c.channel).toMap
 
     // For ordering ports
-    val portIndex = cports2.zipWithIndex.map { case (p, i) => p.port.name -> i }.toMap
+    val portIndex = cports.zipWithIndex.map { case (p, i) => p.port.name -> i }.toMap
     // For ordering channels
-    val channelIndex = cports2.zipWithIndex
-                              .groupBy(_._1.channel)
-                              .mapValues { case vs => vs.map(_._2).max }
+    val channelIndex = cports.zipWithIndex
+                             .groupBy(_._1.channel)
+                             .mapValues { case vs => vs.map(_._2).max }
 
     val cportsDep = cportsMap.mapValues { cps =>
       cps.flatMap(cp => depGraph.reachableFrom(cp.node).flatMap(nodesToChannel.get))
@@ -204,7 +203,7 @@ class EmitChannelInfo extends Transform {
         val deps = cportsDep(cname)
         cps.head.port.direction match {
           case Input =>
-            assert(deps.isEmpty)
+            assert(deps.isEmpty, s"Check that $cname is NOT bidirectional, then bug Jack")
             InputChannel(cname, fields)
           case Output =>
             OutputChannel(cname, fields, deps)
