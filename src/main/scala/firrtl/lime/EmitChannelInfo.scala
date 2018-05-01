@@ -78,42 +78,23 @@ object DependencyGraph {
     def getDeps(expr: Expression): Seq[LogicNode] = getDepsImpl(mod.name, instMap)(expr)
 
     def onStmt(stmt: Statement): Unit = stmt match {
-      case DefRegister(_, name, _, clock, reset, init) =>
-        val node = LogicNode(mod.name, name)
-        depGraph.addVertex(node)
-        Seq(clock, reset, init).flatMap(getDeps(_)).foreach(ref => depGraph.addPairWithEdge(node, ref))
+      case _: DefRegister => // ignore
       case DefNode(_, name, value) =>
         val node = LogicNode(mod.name, name)
         depGraph.addVertex(node)
         getDeps(value).foreach(ref => depGraph.addPairWithEdge(node, ref))
       case DefWire(_, name, _) =>
         depGraph.addVertex(LogicNode(mod.name, name))
-      case mem: DefMemory =>
-        // Treat DefMems as a node with outputs depending on the node and node depending on inputs
-        // From perpsective of the module or instance, MALE expressions are inputs, FEMALE are outputs
-        val memRef = WRef(mem.name, MemPortUtils.memType(mem), ExpKind, FEMALE)
-        val exprs = Utils.create_exps(memRef).groupBy(Utils.gender(_))
-        val sources = exprs.getOrElse(MALE, List.empty).flatMap(getDeps(_))
-        val sinks = exprs.getOrElse(FEMALE, List.empty).flatMap(getDeps(_))
-        val memNode = getDeps(memRef) match { case Seq(node) => node }
-        depGraph.addVertex(memNode)
-        sinks.foreach(sink => depGraph.addPairWithEdge(sink, memNode))
-        sources.foreach(source => depGraph.addPairWithEdge(memNode, source))
-      case Attach(_, exprs) => // Add edge between each expression
-        exprs.flatMap(getDeps(_)).toSet.subsets(2).map(_.toList).foreach {
-          case Seq(a, b) =>
-            depGraph.addPairWithEdge(a, b)
-            depGraph.addPairWithEdge(b, a)
-        }
-      case Connect(_, loc, expr) =>
-        // This match enforces the low Firrtl requirement of expanded connections
-        val node = getDeps(loc) match { case Seq(elt) => elt }
-        getDeps(expr).foreach(ref => depGraph.addPairWithEdge(node, ref))
-      // Simulation constructs are treated as top-level outputs
-      case Stop(_,_, clk, en) =>
-        Seq(clk, en).flatMap(getDeps(_)).foreach(ref => depGraph.addPairWithEdge(circuitSink, ref))
-      case Print(_, _, args, clk, en) =>
-        (args :+ clk :+ en).flatMap(getDeps(_)).foreach(ref => depGraph.addPairWithEdge(circuitSink, ref))
+      case _: DefMemory => // ignore
+      case Connect(_, loc, expr) => kind(loc) match {
+        case MemKind | RegKind => // ignore
+        case _ =>
+          // This match enforces the low Firrtl requirement of expanded connections
+          val node = getDeps(loc) match { case Seq(elt) => elt }
+          getDeps(expr).foreach(ref => depGraph.addPairWithEdge(node, ref))
+      }
+      case _: Stop => // ignore
+      case _: Print => // ignore
       case Block(stmts) => stmts.foreach(onStmt(_))
       case ignore @ (_: IsInvalid | _: WDefInstance | EmptyStmt) => // do nothing
       case other => throw new Exception(s"Unexpected Statement $other")
