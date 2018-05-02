@@ -47,7 +47,9 @@ class UclidEmitter extends SeqTransform with Emitter {
 
   private def serialize_binop(p: DoPrim, arg0: String, arg1: String): String = p.op match {
     case Add => s"(0bv1 ++ $arg0) + (0bv1 ++ $arg1)"
+    case Addw => s"$arg0 + $arg1"
     case Sub => s"(0bv1 ++ $arg0) - (0bv1 ++ $arg1)"
+    case Subw => s"$arg0 - $arg1"
     case Lt => s"$arg0 < $arg1"
     case Leq => s"$arg0 <= $arg1"
     case Gt => s"$arg0 > $arg1"
@@ -404,7 +406,8 @@ class UclidEmitter extends SeqTransform with Emitter {
 
   /** Transforms to run before emission */
   def transforms = Seq(
-    new RemoveTail,
+    new ReplaceTruncatingArithmetic,
+    new DeadCodeElimination,
     new SimplifyRegUpdate,
     new lime.EmitChannelInfo
   )
