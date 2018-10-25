@@ -45,10 +45,30 @@ class UclidEmitter extends SeqTransform with Emitter {
     case _ => throwInternalError(s"Illegal unary operator: ${p.op}")
   }
 
+  private def serialize_shamt_exp(p: DoPrim, shamtArg: String): String = p.op match {
+    case Dshlw | Dshr =>
+      val extra_bits = get_width(p.args(0).tpe) - get_width(p.args(1).tpe)
+      if (extra_bits < 0) {
+        throwInternalError(s"Shift amount must be wider than shifted value")
+      } else if (extra_bits == 0) {
+        shamtArg
+      } else {
+        s"bv_zero_extend(${extra_bits}, ${shamtArg})"
+      }
+    case Shlw | Shr => shamtArg
+    case _ => throwInternalError(s"Illegal shift operator: ${p.op}")
+  }
+
   private def serialize_binop(p: DoPrim, arg0: String, arg1: String): String = p.op match {
-    case Add => s"(0bv1 ++ $arg0) + (0bv1 ++ $arg1)"
+    case Add =>  p.tpe match {
+      case UIntType(_) => s"bv_zero_extend(1, ${arg0}) + bv_zero_extend(1, ${arg1})"
+      case SIntType(_) => s"bv_sign_extend(1, ${arg0}) + bv_sign_extend(1, ${arg1})"
+    }
     case Addw => s"$arg0 + $arg1"
-    case Sub => s"(0bv1 ++ $arg0) - (0bv1 ++ $arg1)"
+    case Sub =>  p.tpe match {
+      case UIntType(_) => s"bv_zero_extend(1, ${arg0}) - bv_zero_extend(1, ${arg1})"
+      case SIntType(_) => s"bv_sign_extend(1, ${arg0}) - bv_sign_extend(1, ${arg1})"
+    }
     case Subw => s"$arg0 - $arg1"
     case Lt => s"$arg0 < $arg1"
     case Leq => s"$arg0 <= $arg1"
@@ -70,13 +90,24 @@ class UclidEmitter extends SeqTransform with Emitter {
         s"$arg0 | $arg1"
     case Xor => s"$arg0 ^ $arg1"
     case Bits => s"${arg0}[${arg1}]"
+    case Shlw | Dshlw =>
+      val shamt = serialize_shamt_exp(p, arg1)
+      s"bv_left_shift(${shamt}, ${arg0})"
+    case Shr | Dshr =>
+      val shamt = serialize_shamt_exp(p, arg1)
+      p.tpe match {
+        case UIntType(_) => s"bv_l_right_shift(${shamt}, ${arg0})"
+        case SIntType(_) => s"bv_a_right_shift(${shamt}, ${arg0})"
+      }
     case Cat => s"${arg0} ++ ${arg1}"
-    case Pad =>
+    case Pad => {
       val extra_bits = p.consts(0) - get_width(p.args(0).tpe)
-      if (extra_bits > 0) 
-        s"0bv${extra_bits} ++ ${arg0}"
-      else
-        s"${arg0}"
+      p.tpe match {
+        case UIntType(_) if (extra_bits > 0) => s"bv_zero_extend(${extra_bits}, ${arg0})"
+        case SIntType(_) if (extra_bits > 0) => s"bv_sign_extend(${extra_bits}, ${arg0})"
+        case _ => s"${arg0}"
+      }
+    }
     case _ => throwInternalError(s"Illegal binary operator: ${p.op}")
   }
 
