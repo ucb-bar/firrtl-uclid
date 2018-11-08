@@ -22,6 +22,18 @@ import MemPortUtils.{memPortField, memType}
 // Datastructures
 import scala.collection.mutable.{ArrayBuffer, LinkedHashMap, HashSet}
 
+case class BMCAnnotation(val steps: BigInt) extends NoTargetAnnotation
+
+case class UclidAssumptionAnnotation(val target: ReferenceTarget) extends SingleTargetAnnotation[ReferenceTarget] {
+  def targets = Seq(target)
+  def duplicate(t: ReferenceTarget) = this.copy(t)
+}
+
+case class UclidPropertyAnnotation(val target: ReferenceTarget) extends SingleTargetAnnotation[ReferenceTarget] {
+  def targets = Seq(target)
+  def duplicate(t: ReferenceTarget) = this.copy(t)
+}
+
 class IndentLevel {
   var value: Int = 0
   def increase() = value += 2
@@ -55,7 +67,7 @@ class UclidEmitter extends SeqTransform with Emitter {
       } else {
         s"bv_zero_extend(${extra_bits}, ${shamtArg})"
       }
-    case Shlw | Shr => shamtArg
+    case Shl | Shr => shamtArg
     case _ => throwInternalError(s"Illegal shift operator: ${p.op}")
   }
 
@@ -90,7 +102,7 @@ class UclidEmitter extends SeqTransform with Emitter {
         s"$arg0 | $arg1"
     case Xor => s"$arg0 ^ $arg1"
     case Bits => s"${arg0}[${arg1}]"
-    case Shlw | Dshlw =>
+    case Shl | Dshlw =>
       val shamt = serialize_shamt_exp(p, arg1)
       s"bv_left_shift(${shamt}, ${arg0})"
     case Shr | Dshr =>
@@ -215,7 +227,7 @@ class UclidEmitter extends SeqTransform with Emitter {
     w write s"var ${wire.name} : ${uclType};\n"
   }
 
-  private def emit_init(mems: Seq[DefMemory])(implicit w: Writer, indent: IndentLevel): Unit = {
+  private def emit_init(mems: Seq[DefMemory], nodes: Seq[DefNode], comb_assigns: Seq[Connect])(implicit w: Writer, indent: IndentLevel): Unit = {
     indent_line()
     w.write(s"init {\n")
     indent.increase()
@@ -225,19 +237,39 @@ class UclidEmitter extends SeqTransform with Emitter {
       val dataType = serialize_type(m.dataType)
       w.write(s"assume (forall (a : $addrType) :: ${m.name}[a] == 0$dataType);\n")
     }
+    // TODO: these may need toposort
+    nodes.foreach(emit_node_init(_))
+    comb_assigns.foreach(emit_wire_init(_))
     indent.decrease()
     indent_line()
     w.write("}\n")
   }
 
-  private def emit_node_assignment(n: DefNode)(implicit w: Writer, indent: IndentLevel, rhsPrime: Boolean): Unit = {
+  private def emit_node_init(n: DefNode)(implicit w: Writer, indent: IndentLevel): Unit = {
+    implicit val rhsPrimes = false
+    indent_line()
+    w write s"${n.name} = "
+    w write serialize_rhs_exp(n.value)
+    w write ";\n"
+  }
+
+  private def emit_wire_init(c: Connect)(implicit w: Writer, indent: IndentLevel): Unit = {
+    implicit val rhsPrimes = false
+    val lhs = serialize_lhs_exp(c.loc)
+    indent_line()
+    w write s"${lhs} = "
+    w write serialize_rhs_exp(c.expr)
+    w write ";\n"
+  }
+
+  private def emit_node_assignment(n: DefNode)(implicit w: Writer, indent: IndentLevel, rhsPrimes: Boolean): Unit = {
     indent_line()
     w write s"${n.name}' = "
     w write serialize_rhs_exp(n.value)
     w write ";\n"
   }
 
-  private def emit_connect(c: Connect)(implicit w: Writer, indent: IndentLevel, rhsPrime: Boolean): Unit = {
+  private def emit_connect(c: Connect)(implicit w: Writer, indent: IndentLevel, rhsPrimes: Boolean): Unit = {
     val lhs = serialize_lhs_exp(c.loc)
     indent_line()
     w write s"${lhs}' = "
@@ -245,7 +277,7 @@ class UclidEmitter extends SeqTransform with Emitter {
     w write ";\n"
   }
 
-  private def emit_mem_reads(m: DefMemory)(implicit w: Writer, indent: IndentLevel, rhsPrime: Boolean): Unit = {
+  private def emit_mem_reads(m: DefMemory)(implicit w: Writer, indent: IndentLevel, rhsPrimes: Boolean): Unit = {
     for (r <- m.readers) {
       val lhs = serialize_lhs_exp(memPortField(m, r, "data"))
       val rref = serialize_rhs_exp(WRef(m.name))
@@ -259,7 +291,7 @@ class UclidEmitter extends SeqTransform with Emitter {
   private def writeProcedureName(m: DefMemory): String = s"write_mem_${m.name}"
 
   private case class WritePort(name: String, addr: String, data: String, en: String, mask: String)
-  private def emit_mem_write_procedure(m: DefMemory)(implicit w: Writer, indent: IndentLevel, rhsPrime: Boolean): Unit = {
+  private def emit_mem_write_procedure(m: DefMemory)(implicit w: Writer, indent: IndentLevel, rhsPrimes: Boolean): Unit = {
     indent_line()
     val pname = writeProcedureName(m)
     w.write(s"procedure $pname() modifies ${m.name}, havoc_${m.name};\n")
@@ -301,7 +333,7 @@ class UclidEmitter extends SeqTransform with Emitter {
     w.write("}\n");
   }
 
-  private def emit_mem_writes(m: DefMemory)(implicit w: Writer, indent: IndentLevel, rhsPrime: Boolean): Unit = {
+  private def emit_mem_writes(m: DefMemory)(implicit w: Writer, indent: IndentLevel, rhsPrimes: Boolean): Unit = {
     indent_line()
     val pname = writeProcedureName(m)
     w.write(s"call $pname();\n")
@@ -324,7 +356,43 @@ class UclidEmitter extends SeqTransform with Emitter {
     w write s"}\n"
   }
 
-  private def emit_module(m: Module)(implicit w: Writer): Unit = {
+  private def emit_assumptions(cs: CircuitState)(implicit w: Writer, indent: IndentLevel): Unit = {
+    cs.annotations.collect {
+      case UclidAssumptionAnnotation(rt) =>
+        indent_line()
+        w.write(s"assume assert_${rt.ref} : ${rt.ref};\n")
+    }
+  }
+
+  private def emit_properties(cs: CircuitState)(implicit w: Writer, indent: IndentLevel): Unit = {
+    cs.annotations.collect {
+      case UclidPropertyAnnotation(rt) =>
+        indent_line()
+        w.write(s"invariant assert_${rt.ref} : ${rt.ref};\n")
+    }
+  }
+
+  private def emit_control_block(cs: CircuitState)(implicit w: Writer, indent: IndentLevel): Unit = {
+    cs.annotations.collect {
+      case BMCAnnotation(steps) =>
+        indent_line()
+        w.write(s"control {\n")
+        indent.increase()
+        indent_line()
+        w.write(s"vobj = unroll(${steps});\n")
+        indent_line()
+        w.write(s"check;\n")
+        indent_line()
+        w.write(s"print_results();\n")
+        indent_line()
+        w.write(s"vobj.print_cex();\n")
+        indent.decrease()
+        indent_line()
+        w.write(s"}\n")
+    }
+  }
+
+  private def emit_module(m: Module, cs: CircuitState)(implicit w: Writer): Unit = {
     // Just IO, nodes, registers
     val nodes = ArrayBuffer[DefNode]()
     val wire_decls = ArrayBuffer[DefWire]()
@@ -409,7 +477,7 @@ class UclidEmitter extends SeqTransform with Emitter {
     emit_comment("Nodes")
     nodes.foreach(emit_node_decl(_))
     emit_comment("Init")
-    emit_init(mem_decls)
+    emit_init(mem_decls, nodes, comb_assigns)
     implicit var rhsPrimes = false
     emit_comment("Mem Writes")
     mem_decls.foreach(emit_mem_write_procedure(_))
@@ -423,6 +491,9 @@ class UclidEmitter extends SeqTransform with Emitter {
     mem_decls.foreach(emit_mem_reads(_))
     comb_assigns.foreach(emit_connect(_))
     emit_close_scope()
+    emit_assumptions(cs)
+    emit_properties(cs)
+    emit_control_block(cs)
     emit_close_scope()
   }
 
@@ -430,7 +501,7 @@ class UclidEmitter extends SeqTransform with Emitter {
     val circuit = runTransforms(cs).circuit
     assert(circuit.modules.length == 1) // flat circuits, for now
     circuit.modules.head match {
-      case m: Module => emit_module(m)(w)
+      case m: Module => emit_module(m, cs)(w)
       case _ => throw EmitterException(s"UCLID backed supports ordinary modules only!")
     }
   }
