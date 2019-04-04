@@ -1,3 +1,20 @@
+# A UCLID5 backend for FIRRTL
+
+This repository contains a variant of the FIRRTL compiler that can translate FIRRTL circuits to the language of the UCLID5 modeling system.
+
+To build the project:
+```
+sbt test assembly
+```
+
+To translate a FIRRTL file to a UCLID5 system description:
+```
+utils/bin/firrtl -i <input.fir> -o <output.ucl> -X uclid
+```
+
+# The FIRRTL README
+
+
 ![FIRRTL](https://raw.githubusercontent.com/freechipsproject/firrtl/master/doc/images/firrtl_logo.svg?sanitize=true)
 
 #
